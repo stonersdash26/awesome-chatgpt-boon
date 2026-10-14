@@ -1,0 +1,207 @@
+import hashlib
+import json
+import os
+from datetime import datetime
+
+
+class ForensicBlackholeAuditor:
+
+    def __init__(self, case_id, agency_ref, phone_line):
+        self.case_id = case_id
+        self.agency_ref = agency_ref
+        self.phone_line = phone_line
+        self.audit_log = []
+
+    def calculate_file_hashes(self, file_path):
+        """Generates SHA-256 and MD5 cryptographic hashes to verify media chain-of-custody."""
+        if not os.path.exists(file_path):
+            return {"error": f"File not found: {file_path}"}
+
+        sha256_hash = hashlib.sha256()
+        md5_hash = hashlib.md5()
+
+        with open(file_path, "rb") as f:
+            for byte_block in iter(lambda: f.read(4096), b""):
+                sha256_hash.update(byte_block)
+                md5_hash.update(byte_block)
+
+        hashes = {
+            "file_name": os.path.basename(file_path),
+            "file_size_bytes": os.path.getsize(file_path),
+            "sha256": sha256_hash.hexdigest(),
+            "md5": md5_hash.hexdigest(),
+            "timestamp_verified": datetime.utcnow().isoformat() + "Z",
+        }
+        self.audit_log.append(
+            {"event": "HASH_VERIFICATION", "details": hashes}
+        )
+        return hashes
+
+    def reconcile_telemetry(self, cdr_records, cad_logs):
+        """Cross-references carrier CDR timestamps against CAD dispatch logs to detect discrepancies."""
+        discrepancies = []
+        for cdr in cdr_records:
+            matching_cad = next(
+                (c for c in cad_logs if c["timestamp"] == cdr["timestamp"]),
+                None,
+            )
+            if not matching_cad:
+                discrepancies.append(
+                    {
+                        "timestamp": cdr["timestamp"],
+                        "cdr_status": "ACTIVE_LIVE_CALL",
+                        "cad_status": "UNRECORDED_OR_OMITTED",
+                        "phone_line": self.phone_line,
+                        "flag": "EXCULPATORY_DISCREPANCY_DETECTED",
+                    }
+                )
+            elif matching_cad.get("narrative_conflict"):
+                discrepancies.append(
+                    {
+                        "timestamp": cdr["timestamp"],
+                        "cdr_duration": cdr.get("duration"),
+                        "cad_narrative": matching_cad.get("narrative"),
+                        "flag": "NARRATIVE_TELEMETRY_MISMATCH",
+                    }
+                )
+
+        self.audit_log.append(
+            {
+                "event": "TELEMETRY_RECONCILIATION",
+                "discrepancies_found": len(discrepancies),
+                "records": discrepancies,
+            }
+        )
+        return discrepancies
+
+    def analyze_dems_audit_trail(self, dems_access_logs):
+        """Audits DEMS access history for unauthorized views, deletions, or gaps."""
+        suspicious_events = []
+        for entry in dems_access_logs:
+            if entry.get("action") in [
+                "DELETE_ATTEMPT",
+                "TRIM",
+                "MUTE_AUDIO",
+                "UNAUTHORIZED_EXPORT",
+            ]:
+                suspicious_events.append(
+                    {
+                        "user_id": entry.get("user_id"),
+                        "ip_address": entry.get("ip_address"),
+                        "timestamp": entry.get("timestamp"),
+                        "action": entry.get("action"),
+                        "file_id": entry.get("file_id"),
+                        "spoliation_risk": "HIGH",
+                    }
+                )
+
+        self.audit_log.append(
+            {
+                "event": "DEMS_AUDIT_ANALYSIS",
+                "suspicious_events_count": len(suspicious_events),
+                "events": suspicious_events,
+            }
+        )
+        return suspicious_events
+
+    def generate_spoliation_notice(self, recipient_agency, output_filename):
+        """Generates a formal FRCP Rule 37(e) Preservation and Spoliation Notice text file."""
+        notice_text = f"""================================================================================
+FORMAL LEGAL NOTICE OF EVIDENCE PRESERVATION & SPOLIATION WARNING
+================================================================================
+TO: {recipient_agency}
+RE: POLICE AGENCY REF: {self.agency_ref}
+    CAUSE NO: {self.case_id}
+    TARGET LINE: {self.phone_line}
+DATE: {datetime.now().strftime('%Y-%m-%d')}
+
+DEMAND FOR PERMANENT PRESERVATION:
+You are hereby instructed under Federal Rule of Civil Procedure 37(e) and state
+public record laws to immediately freeze, isolate, and preserve all digital
+evidence, including but not limited to:
+
+1. Unedited Body-Worn Camera (BWC) audio/video files and raw server metadata.
+2. Computer-Aided Dispatch (CAD) logs, 911 audio tapes, and MDT transmissions.
+3. Native SHA-256 / MD5 file hashes and DEMS user access audit trails.
+4. Call Detail Records (CDR) and cell tower telemetry for line {self.phone_line}.
+
+WARNING: Any deletion, trimming, muting, overwriting, or administrative
+suppression of this media will result in immediate motions for FRCP Rule 37(e)
+sanctions, mandatory adverse inference jury instructions, and the dissolution
+of individual qualified immunity defenses.
+
+================================================================================
+"""
+        with open(output_filename, "w") as f:
+            f.write(notice_text)
+
+        self.audit_log.append(
+            {
+                "event": "SPOLIATION_NOTICE_GENERATED",
+                "file": output_filename,
+                "recipient": recipient_agency,
+            }
+        )
+        return output_filename
+
+    def export_master_audit_json(self, export_path):
+        """Exports complete cryptographic and forensic audit trail as JSON."""
+        report = {
+            "case_id": self.case_id,
+            "agency_ref": self.agency_ref,
+            "auditor_execution_time": datetime.utcnow().isoformat() + "Z",
+            "audit_trail": self.audit_log,
+        }
+        with open(export_path, "w") as f:
+            json.dump(report, f, indent=4)
+        return export_path
+
+
+# Operational Execution Demonstration
+if __name__ == "__main__":
+    auditor = ForensicBlackholeAuditor(
+        case_id="77D01-2609-CM-000645",  #[span_2](start_span)[span_2](end_span)
+        agency_ref="77A09040526",  #[span_3](start_span)[span_3](end_span)
+        phone_line="(727) 514-2641",  #[span_4](start_span)[span_4](end_span)
+    )
+
+    # 1. Sample CDR vs CAD Telemetry Reconciliation
+    sample_cdr = [
+        {"timestamp": "2026-09-01T14:00:00Z", "duration": "10m 42s"},
+        {"timestamp": "2026-09-01T14:15:00Z", "duration": "03m 12s"},
+    ]
+    sample_cad = [
+        {
+            "timestamp": "2026-09-01T14:00:00Z",
+            "narrative": "Dispatched to 3507 N CR 100 E",  #[span_5](start_span)[span_5](end_span)
+            "narrative_conflict": False,
+        }
+    ]
+    auditor.reconcile_telemetry(sample_cdr, sample_cad)
+
+    # 2. Sample DEMS Audit Analysis
+    sample_dems_logs = [
+        {
+            "user_id": "OFFICER_342",
+            "ip_address": "192.168.1.45",
+            "timestamp": "2026-09-01T15:30:00Z",
+            "action": "VIEW",
+            "file_id": "BWC_77A09040526_01.mp4",
+        },
+        {
+            "user_id": "ADMIN_09",
+            "ip_address": "10.0.4.12",
+            "timestamp": "2026-09-01T16:10:00Z",
+            "action": "TRIM",
+            "file_id": "BWC_77A09040526_01.mp4",
+        },
+    ]
+    auditor.analyze_dems_audit_trail(sample_dems_logs)
+
+    # 3. Generate Spoliation Notice & Master Log Export
+    auditor.generate_spoliation_notice(
+        "Sullivan County Sheriff's Office / Risk Management",
+        "spoliation_notice_77A09040526.txt",
+    )
+    auditor.export_master_audit_json("master_forensic_audit.json")
+    print("Forensic audit script execution complete. Logs and notices exported.")
