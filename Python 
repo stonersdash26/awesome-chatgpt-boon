@@ -8,6 +8,254 @@ class OdysseyDocketBlackholeAuditor:
     """Forensic Web Audit Engine using BeautifulSoup to parse public court dockets (Indiana Odyssey / MyCase),
 
     detect administrative 'blackholes' (sealed dockets, missing filings, improper exclusions),
+    and extract Chronological Case Summary (CCS) data for State v. Joshua Ryan Boone[span_0](start_span)[span_0](end_span)[span_1](start_span)[span_1](end_span).
+    """
+
+    def __init__(
+        self,
+        cause_no="77D01-2609-CM-000645",
+        agency_ref="77A09040526",
+        prosecutor_no="77-DM4020153",
+    ):
+        self.cause_no = cause_no  #[span_2](start_span)[span_2](end_span)[span_3](start_span)[span_3](end_span)
+        self.agency_ref = agency_ref  #[span_4](start_span)[span_4](end_span)[span_5](start_span)[span_5](end_span)
+        self.prosecutor_no = prosecutor_no  #[span_6](start_span)[span_6](end_span)[span_7](start_span)[span_7](end_span)
+        self.docket_entries = []
+        self.blackhole_alerts = []
+
+    def parse_ccs_docket_html(self, html_content):
+        """Uses BeautifulSoup to parse Odyssey CCS HTML tables, extract timestamps,
+
+        filing titles, and flags administrative suppression markers.
+        """
+        soup = BeautifulSoup(html_content, "html.parser")
+
+        # 1. Parse Case Header & Confidentiality Status
+        status_banner = soup.find(class_="case-status") or soup.find(
+            id="caseHeader"
+        )
+        if status_banner:
+            banner_text = status_banner.get_text(strip=True).upper()
+            if any(
+                term in banner_text
+                for term in [
+                    "RESTRICTED",
+                    "CONFIDENTIAL",
+                    "EXCLUDED",
+                    "SEALED",
+                ]
+            ):
+                self.blackhole_alerts.append(
+                    {
+                        "type": "RESTRICTED_DOCKET_STATUS",
+                        "severity": "HIGH",
+                        "detail": f"Case banner indicates non-public or restricted status: '{banner_text}[span_8](start_span)'[span_8](end_span).",
+                    }
+                )
+
+        # 2. Iterate through CCS Docket Rows
+        docket_table = soup.find("table", {"id": "ccsTable"}) or soup.find(
+            "table", class_="docket-table"
+        )
+
+        if not docket_table:
+            self.blackhole_alerts.append(
+                {
+                    "type": "MISSING_DOCKET_TABLE",
+                    "severity": "CRITICAL",
+                    "detail": "No valid CCS table found in HTML response. Possible administrative blackout[span_9](start_span)[span_9](end_span).",
+                }
+            )
+            return []
+
+        rows = docket_table.find_all("tr")[1:]  # Skip header row
+        for row in rows:
+            cols = row.find_all(["td", "th"])
+            if len(cols) >= 3:
+                date_str = cols[0].get_text(strip=True)
+                filed_by = cols[1].get_text(strip=True)
+                description = cols[2].get_text(strip=True)
+
+                # Check for document links / attachments
+                link = cols[2].find("a", href=True)
+                doc_url = link["href"] if link else None
+
+                entry = {
+                    "date": date_str,
+                    "filed_by": filed_by,
+                    "description": description,
+                    "has_document_link": doc_url is not None,
+                    "document_url": doc_url,
+                }
+                self.docket_entries.append(entry)
+
+                # Analyze entry for "Blackhole" indicators
+                self._check_entry_for_blackholes(entry)
+
+        return self.docket_entries
+
+    def _check_entry_for_blackholes(self, entry):
+        """Scans individual CCS entries for procedural omissions, suppressed filings,
+
+        or unrecorded exculpatory evidence.
+        """
+        desc_upper = entry["description"].upper()
+
+        # Check for Probable Cause Affidavit irregularities
+        if "PROBABLE CAUSE" in desc_upper and not entry["has_document_link"]:
+            self.blackhole_alerts.append(
+                {
+                    "type": "UNATTACHED_PROBABLE_CAUSE",
+                    "date": entry["date"],
+                    "severity": "HIGH",
+                    "detail": f"Probable cause entry recorded without viewable public document attachment: '{entry['description']}[span_10](start_span)'[span_10](end_span).",
+                }
+            )
+
+        # Check for Excluded / Confidential filings
+        if any(
+            kw in desc_upper
+            for kw in [
+                "CONFIDENTIAL ENTRY",
+                "EXCLUDED FROM PUBLIC ACCESS",
+                "SEALED ORDER",
+            ]
+        ):
+            self.blackhole_alerts.append(
+                {
+                    "type": "CONFIDENTIAL_ENTRY_SEAL",
+                    "date": entry["date"],
+                    "severity": "MEDIUM",
+                    "detail": f"Administrative seal or public exclusion tag detected: '{entry['description']}[span_11](start_span)'[span_11](end_span).",
+                }
+            )
+
+    def audit_exculpatory_omissions(self, expected_exhibits):
+        """Cross-references expected exculpatory filings (e.g., CAD logs, CDR carrier logs, BWC hashes)
+
+        against actual Odyssey CCS entries parsed by BeautifulSoup.
+        """
+        parsed_text_blob = " ".join(
+            [e["description"].upper() for e in self.docket_entries]
+        )
+
+        for exhibit in expected_exhibits:
+            keyword = exhibit["keyword"].upper()
+            if keyword not in parsed_text_blob:
+                self.blackhole_alerts.append(
+                    {
+                        "type": "EXCULPATORY_EVIDENCE_BLACKHOLE",
+                        "severity": "CRITICAL",
+                        "exhibit_id": exhibit["id"],
+                        "target_identifier": exhibit["identifier"],
+                        "detail": f"Expected exculpatory exhibit '{exhibit['name']}' ({exhibit['identifier']}) missing from court CCS docket[span_12](start_span)[span_12](end_span).",
+                    }
+                )
+
+    def export_forensic_report_json(self, output_path="bs4_docket_audit.json"):
+        """Exports the complete BeautifulSoup parsing and blackhole audit report as structured JSON."""
+        report = {
+            "cause_number": self.cause_no,  #[span_13](start_span)[span_13](end_span)[span_14](start_span)[span_14](end_span)
+            "agency_reference": self.agency_ref,  #[span_15](start_span)[span_15](end_span)[span_16](start_span)[span_16](end_span)
+            "prosecutor_number": self.prosecutor_no,  #[span_17](start_span)[span_17](end_span)[span_18](start_span)[span_18](end_span)
+            "audit_timestamp_utc": datetime.utcnow().isoformat() + "Z",
+            "total_docket_entries_parsed": len(self.docket_entries),
+            "blackhole_alerts_detected": len(self.blackhole_alerts),
+            "alerts": self.blackhole_alerts,
+            "parsed_docket": self.docket_entries,
+        }
+        with open(output_path, "w") as f:
+            json.dump(report, f, indent=4)
+        return output_path
+
+
+# Demonstration Execution with Simulated Odyssey Public Docket HTML
+if __name__ == "__main__":
+    # Simulated HTML payload matching Indiana Odyssey CCS docket markup
+    simulated_odyssey_html = """
+    <html>
+        <body>
+            <div id="caseHeader" class="case-status">
+                STATUS: ACTIVE MISDEMEANOR - RESTRICTED PUBLIC VIEW[span_19](start_span)[span_19](end_span)
+            </div>
+            <table id="ccsTable" class="docket-table">
+                <thead>
+                    <tr>
+                        <th>Date</th>
+                        <th>Filed By</th>
+                        <th>Chronological Case Summary Entry</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>09/01/2026</td>
+                        <td>State of Indiana</td>
+                        <td>Information Filed - Class A Criminal Mischief (IC 35-43-1-2(b)(1))[span_20](start_span)[span_20](end_span)</td>
+                    </tr>
+                    <tr>
+                        <td>09/01/2026</td>
+                        <td>Law Enforcement</td>
+                        <td>Probable Cause Affidavit Filed (No Document Link)[span_21](start_span)[span_21](end_span)</td>
+                    </tr>
+                    <tr>
+                        <td>09/05/2026</td>
+                        <td>Court</td>
+                        <td>CONFIDENTIAL ENTRY - EXCLUDED FROM PUBLIC ACCESS[span_22](start_span)[span_22](end_span)</td>
+                    </tr>
+                    <tr>
+                        <td>09/29/2026</td>
+                        <td>Defendant Pro Se</td>
+                        <td><a href="/docs/entry_77D01_master.pdf">Formal Transmittal of Master Dossier and Notice of Evidentiary Submission[span_23](start_span)[span_23](end_span)</a></td>
+                    </tr>
+                </tbody>
+            </table>
+        </body>
+    </html>
+    """
+
+    # 1. Initialize Auditor with Case Identifiers
+    auditor = OdysseyDocketBlackholeAuditor(
+        cause_no="77D01-2609-CM-000645",  #[span_24](start_span)[span_24](end_span)[span_25](start_span)[span_25](end_span)
+        agency_ref="77A09040526",  #[span_26](start_span)[span_26](end_span)[span_27](start_span)[span_27](end_span)
+        prosecutor_no="77-DM4020153",  #[span_28](start_span)[span_28](end_span)[span_29](start_span)[span_29](end_span)
+    )
+
+    # 2. Parse HTML with BeautifulSoup
+    auditor.parse_ccs_docket_html(simulated_odyssey_html)
+
+    # 3. Audit for Missing Mandatory Exculpatory Exhibits
+    expected_evidence_matrix = [
+        {
+            "id": "EXHIBIT_A",
+            "name": "CAD & Call Detail Records",
+            "keyword": "727-514-2641",
+            "identifier": "Line (727) 514-2641 CDR Log",
+        },  #[span_30](start_span)[span_30](end_span)
+        {
+            "id": "EXHIBIT_B",
+            "name": "BWC Raw Server Hashes",
+            "keyword": "SHA-256",
+            "identifier": "Agency Ref 77A09040526 DEMS Hash",
+        },  #[span_31](start_span)[span_31](end_span)
+    ]
+    auditor.audit_exculpatory_omissions(expected_evidence_matrix)
+
+    # 4. Export Forensic Report
+    json_path = auditor.export_forensic_report_json()
+    print(
+        f"BeautifulSoup docket blackhole audit complete. Report exported to: {json_path}"
+    )
+
+from datetime import datetime
+import json
+import re
+from bs4 import BeautifulSoup
+
+
+class OdysseyDocketBlackholeAuditor:
+    """Forensic Web Audit Engine using BeautifulSoup to parse public court dockets (Indiana Odyssey / MyCase),
+
+    detect administrative 'blackholes' (sealed dockets, missing filings, improper exclusions),
     and extract Chronological Case Summary (CCS) data for State v. Joshua Ryan Boone.
     """
 
