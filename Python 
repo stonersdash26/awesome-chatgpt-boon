@@ -205,3 +205,81 @@ if __name__ == "__main__":
     )
     auditor.export_master_audit_json("master_forensic_audit.json")
     print("Forensic audit script execution complete. Logs and notices exported.")
+import hashlib
+import json
+import os
+from datetime import datetime
+
+
+class LegalTechForensicBlackholeAuditor:
+    """Automated forensic integrity, telemetry reconciliation, and evidence spoliation auditor
+
+    for State of Indiana v. Joshua Ryan Boone / Sullivan County Civil Rights
+    Litigation.
+    """
+
+    def __init__(
+        self,
+        cause_no,
+        agency_ref,
+        prosecutor_no,
+        primary_phone,
+        historical_phone,
+    ):
+        self.cause_no = cause_no
+        self.agency_ref = agency_ref
+        self.prosecutor_no = prosecutor_no
+        self.primary_phone = primary_phone
+        self.historical_phone = historical_phone
+        self.audit_log = []
+
+    def verify_cryptographic_hashes(self, file_path):
+        """Computes SHA-256 and MD5 hashes for raw BWC video, CAD logs, and 911 audio files."""
+        if not os.path.exists(file_path):
+            return {"error": f"Target media file not found: {file_path}"}
+
+        sha256 = hashlib.sha256()
+        md5 = hashlib.md5()
+        with open(file_path, "rb") as f:
+            for chunk in iter(lambda: f.read(4096), b""):
+                sha256.update(chunk)
+                md5.update(chunk)
+
+        record = {
+            "file_name": os.path.basename(file_path),
+            "sha256_hash": sha256.hexdigest(),
+            "md5_hash": md5.hexdigest(),
+            "size_bytes": os.path.getsize(file_path),
+            "timestamp_utc": datetime.utcnow().isoformat() + "Z",
+        }
+        self.audit_log.append({"event": "HASH_VERIFICATION", "data": record})
+        return record
+
+    def reconcile_telemetry_and_cad(self, cdr_records, cad_logs):
+        """Reconciles 10-11 minute continuous live call logs against CAD dispatch timestamps."""
+        discrepancies = []
+        for cdr in cdr_records:
+            match = next(
+                (cad for cad in cad_logs if cad["timestamp"] == cdr["timestamp"]),
+                None,
+            )
+            if not match:
+                discrepancies.append(
+                    {
+                        "timestamp": cdr["timestamp"],
+                        "carrier_line": self.primary_phone,
+                        "call_duration": cdr.get("duration"),
+                        "cad_status": "UNRECORDED_OR_SUPPRESSED",
+                        "violation": "EXCULPATORY_DISPATCH_OMISSION",
+                    }
+                )
+            elif match.get("narrative_mismatch"):
+                discrepancies.append(
+                    {
+                        "timestamp": cdr["timestamp"],
+                        "officer_narrative": match.get("narrative"),
+                        "carrier_audio_state": "ACTIVE_LIVE_CALL_IN_PROGRESS",
+                        "violation": "FALSE_PROBABLE_CAUSE_CONSTRUCTION",
+                    }
+                )
+
